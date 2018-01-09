@@ -140,6 +140,7 @@ sub start_jpeg_manipulation {
 	    $img ||= read_jpeg $rec->{path};
 	    # Retrieve the APP1 segment and the IFD0 record within.
 	    my ($app1) = $img->get_segments('APP1');
+	    if (! $app1) {return;}
 	    my $ifd0 = $app1->search_record('IFD0');
 	    # Scan the records until the Orientation (0x112) is found.
 	    foreach ( @{$ifd0->{values}[0]} ) {
@@ -205,6 +206,7 @@ sub parse_jpeg {
     my %record = (path => $filename);
 
     my ($app1) = $file->get_segments('APP1');
+    if (! $app1){ return \%record };
     my $ifd0 = $app1->search_record('IFD0');
     foreach ( @{$ifd0->{values}[0]} ) {
 	$record{orientation} = $_->{values}[0] if $_->{key} == 0x112;
