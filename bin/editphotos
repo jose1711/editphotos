@@ -1,0 +1,704 @@
+#!/usr/bin/perl
+# $Id: editphotos,v 1.18 2004/09/28 12:38:51 cbouvi Exp $
+# vim: set foldmethod=marker :
+#
+#  Copyright (C) 2004 Cédric Bouvier
+#
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the Free
+#  Software Foundation; either version 2 of the License, or (at your option)
+#  any later version.
+#
+#  This program is distributed in the hope that it will be useful, but WITHOUT
+#  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+#  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+#  more details.
+#
+#  You should have received a copy of the GNU General Public License along with
+#  this program; if not, write to the Free Software Foundation, Inc., 59 Temple
+#  Place, Suite 330, Boston, MA  02111-1307  USA
+
+# $Log: editphotos,v $
+# Revision 1.18  2004/09/28 12:38:51  cbouvi
+# Fixed typos and improved POD
+#
+# Revision 1.17  2004/09/24 21:00:09  cbouvi
+# New feature to delete Jpeg files
+#
+# Revision 1.16  2004/09/24 20:02:48  cbouvi
+# Added binding for <ESC> to close the windows
+#
+# Revision 1.15  2004/09/24 19:43:37  cbouvi
+# Removed useless indirection in closure
+#
+# Revision 1.14  2004/09/23 21:14:38  cbouvi
+# Displays the larger picture rotated according to the Orientation field
+#
+# Revision 1.13  2004/09/23 21:01:36  cbouvi
+# Sorts the photographs by date
+#
+# Revision 1.12  2004/09/22 21:13:07  cbouvi
+# Added --dummy option to allow testing without actually modifying any Jpeg file
+# Fixed a nasty bug that caused the program to crash when modifying an existing
+# comment.
+# Replacing an existing comment with an empty string now deletes the comment.
+#
+# Revision 1.11  2004/09/21 09:30:29  cbouvi
+# Added the ability to display a bigger picture when clicking on a thumbnail
+#
+# Revision 1.10  2004/09/20 15:15:31  cbouvi
+# Simplified the layout of the radio buttons
+#
+# Revision 1.9  2004/09/17 13:50:44  cbouvi
+# Added switch --version. Fixed typo in POD and verbosity of error messages.
+#
+# Revision 1.8  2004/09/17 13:01:59  cbouvi
+# Added --help switch and Pod::Usage
+#
+# Revision 1.7  2004/09/17 12:49:41  cbouvi
+# Added POD
+#
+# Revision 1.6  2004/09/17 10:13:21  cbouvi
+# Added comments
+#
+# Revision 1.5  2004/09/17 08:52:53  cbouvi
+# Removed useless back and forth conversions between orientation and rotation angles
+#
+# Revision 1.4  2004/09/17 08:40:45  cbouvi
+# Separated the code that reads/parses the Jpeg from the code that builds the GUI
+#
+# Revision 1.3  2004/09/17 08:34:31  cbouvi
+# Moved the XPM within the main program. Added a few comments
+#
+# Revision 1.2	2004/09/17 08:01:39  cbouvi
+# Now extracts the thumbnail data from the Jpeg file itself
+#
+# Revision 1.1.1.1  2004/09/17 07:41:15  cbouvi
+# Initial import. The program is already functional
+#
+
+use strict;
+
+use Tk;
+use Tk::JPEG;
+use Tk::Photo;
+use Tk::Pane;
+use Image::MetaData::JPEG;
+use Image::Magick;
+use MIME::Base64 qw/ encode_base64 /;
+use Getopt::Long;
+use Pod::Usage;
+
+our %opt;
+my $progname = 'editphotos';
+my $VERSION = '0.3';
+our @record;
+our $main;
+
+GetOptions \%opt, qw/ delete! dummy|d help|h version|v / or pod2usage -exitval => 2, -message => "Try $0 --help", -verbose => 0;
+pod2usage -exitval => 1, -verbose => 1 if $opt{help};
+if ( $opt{version} ) {
+    print "editphotos $VERSION\nCopyright (C) 2004 Cedric Bouvier\n";
+    exit 1;
+}
+if ( $opt{dummy} ) {
+    print "Starting in dummy mode: no modification will be written\n";
+}
+$opt{delete} = 1 unless defined($opt{delete});
+
+#
+# sub read_jpg(filename)
+#
+# Returns an Image::MetaData::JPEG object for the given filename
+#
+sub read_jpeg {
+
+    my $i = new Image::MetaData::JPEG shift;
+    die Image::MetaData::JPEG::Error() unless $i;
+    return $i;
+}
+
+#
+# sub start_jpeg_manipulation
+#
+# This function is called when OK is pressed
+# It scans the @record array and updates the Jpeg files accordingly.
+#
+sub start_jpeg_manipulation {
+    foreach my $rec( @record ) {
+        if ( ${$rec->{delete}} ) {
+            print "Deleting $$rec{path}\n";
+            if ( ! $opt{dummy} ) {
+                unlink $rec->{path} or warn "Could not delete $$rec{path}: $!\n";
+            }
+            next;
+        }
+	my $img;
+	if ( $rec->{orientation} != ${$rec->{new_orientation}} ) {
+            print "$$rec{path}: changing orientation from $$rec{orientation} to ${$$rec{new_orientation}}\n";
+	    # Parse the Jpeg file
+	    $img ||= read_jpeg $rec->{path};
+	    # Retrieve the APP1 segment and the IFD0 record within.
+	    my ($app1) = $img->get_segments('APP1');
+	    my $ifd0 = $app1->search_record('IFD0');
+	    # Scan the records until the Orientation (0x112) is found.
+	    foreach ( @{$ifd0->{values}[0]} ) {
+		if ( $_->{key} == 0x112 ) {
+		    $_->{values}[0] = ${$rec->{new_orientation}};
+		    last;
+		}
+	    }
+	    $app1->update();
+	}
+	# Scan through the existing comments and check whether one has changed
+        my @comment_for_deletion; # array of indices of comments to delete later.
+	for ( my $i = 0; $i < @{$rec->{comment}}; $i++ ) {
+	    if ( $rec->{comment}[$i] ne ${$rec->{new_comment}[$i]} ) {
+                my $new = ${$rec->{new_comment}[$i]};
+                if ( $new eq '' ) {
+                    # new comment is empty: delete it later
+                    push @comment_for_deletion, $i;
+                }
+                else {
+                    print "$$rec{path}: changing comment #$i from '$$rec{comment}[$i]' to '${$rec->{new_comment}[$i]}'\n";
+                    $img ||= read_jpeg $rec->{path};
+                    $img->set_comment($i, ${$rec->{new_comment}[$i]});
+                }
+	    }
+	}
+	if ( ${$rec->{new_comment}[-1]} ne '' ) {
+            print "$$rec{path}: adding new comment '${$rec->{new_comment}[-1]}'\n";
+	    $img ||= read_jpeg $rec->{path};
+	    $img->add_comment(${$rec->{new_comment}[-1]});
+	}
+        foreach ( @comment_for_deletion ) {
+            print "$$rec{path}: removing comment #$_: '$$rec{comment}[$_]\n";
+            $img ||= read_jpeg $rec->{path};
+            $img->remove_comment($_);
+        }
+	if ( $img && ! $opt{dummy} ) {
+	    # $img is defined only when orientation or comments have changed.
+	    print "Writing modifications to $$rec{path}\n";
+	    $img->save();
+	}
+    }
+    exit 0;
+}
+
+#
+# sub parse_jpeg(filename)
+#
+# Reads a Jpeg header to retrieve the data needed for the GUI.
+# Returns a hashref containing the data.
+# {
+#   path => path to the Jpeg file
+#   orientation => the orientation in native format (i.e., a integer between 1 and 8)
+#   datetime => the DigitizedDateTime EXIF field YYYY:MM:DD HH:MM:SS
+#   thumbnail => a reference to the thumbnail's Jpeg stream if it exists (undef otherwise))
+#   comment => an array ref of comments (possibly empty)
+# }
+sub parse_jpeg {
+
+    my $filename = shift;
+    my $file = new Image::MetaData::JPEG $filename;
+    die Image::MetaData::JPEG::Error() unless $file;
+    my %record = (path => $filename);
+
+    my ($app1) = $file->get_segments('APP1');
+    my $ifd0 = $app1->search_record('IFD0');
+    foreach ( @{$ifd0->{values}[0]} ) {
+	$record{orientation} = $_->{values}[0] if $_->{key} == 0x112;
+	if ( $_->{key} eq 'SubIFD' ) {
+	    foreach ( @{$_->{values}[0]} ) {
+		$record{datetime} = $_->{values}[0] if $_->{key} == 0x9004;
+	    }
+	}
+    }
+    $record{comment} = [ $file->get_comments() ];
+    $record{thumbnail} = $file->get_Exif_data('THUMBNAIL');
+    \%record;
+}
+
+#
+# sub display_image(href)
+#
+# Display a larger image in its own window. The picture is rotated according to
+# the new_orientation field found in the href and resized to 800x600. The href
+# is one built by parse_jpeg() and contains the following attributes:
+# - path: the path to the full size Jpeg file.
+# - new_orientation: a reference to the currently selected orientation
+# The Tk::Photo object created for the occasion is kept in cache in the display
+# attribute, so that next displays of the same picture take less time.
+#
+sub display_image {
+
+    my $record = shift;
+    my $display = $main->Toplevel();
+
+    my $new_orientation = ${$record->{new_orientation}};
+    if ( ! $record->{display} || $record->{display}[0] != $new_orientation ) {
+	my $i = new Image::Magick;
+	$i->Read($record->{path});
+	$i->Resize('800x600');
+        $i->Rotate(90) if $new_orientation == 2 || $new_orientation == 6;
+        $i->Rotate(180) if $new_orientation == 3 || $new_orientation == 7;
+        $i->Rotate(-90) if $new_orientation == 4 || $new_orientation == 8;
+	$record->{display} = [
+            $new_orientation,
+            $display->Photo(-format => 'JPEG', -data => encode_base64(($i->ImageToBlob())[0]))
+        ];
+    }
+    $display->bind('<Key-Escape>', 'destroy' );
+    $display->Label(-image => $record->{display}[1])->pack(-expand => 'yes', -fill => 'both');
+}
+
+#
+##
+### Read and parse the Jpeg files
+##
+#
+{
+    # We read the whole directory before starting to read the files so that we
+    # know in advance how many files are to be read. This allows us to display
+    # progress information while reading (and possibly resizing) the pictures.
+    my $dir = shift || '.';
+    opendir DH, $dir or die "Cannot read directory $dir: $!";
+    my @file = grep -f && /\.jpe?g$/i, map "$dir/$_", readdir DH;
+
+    my $count = 0;
+    foreach my $file ( @file ) {
+	printf "\rReading file %s (%u/%u)", $file, ++$count, scalar @file;
+	my $record = parse_jpeg $file;
+	
+	# The parse_jpeg function returns values in a hashref. The GUI needs
+	# scalar references so that widgets can modify the values. We thus
+	# create these scalar refs, using a temporary variable containing a
+	# copy of the original value. Keeping the old value will allow to
+	# detect what has changed.
+	# orientation => the original orientation
+	# new_orientation => a reference to a copy of the orientation
+	# comment => an arrayref of original comments
+        # delete => a reference to a boolean stating whether to delete to picture
+	# new_comment => an arrayref of references to copies of the comments
+	my $orientation = $record->{orientation};
+	$record->{new_orientation} = \$orientation;
+        my $delete = 0;
+        $record->{delete} = \$delete;
+
+	$record->{new_comment} = [];
+	foreach ( @{$record->{comment}}, '' ) {
+	    # the last '' adds a new empty comment.
+	    my $dummy = $_;
+	    push @{$record->{new_comment}}, \$dummy;
+	}
+	push @record, $record;
+    }
+    @record = sort { $a->{datetime} cmp $b->{datetime} } @record;
+    print "\n";
+}
+
+#
+##
+### Here starts the tedious job of creating the window and widgets.
+##
+#
+
+$main = new MainWindow
+    -name => $progname,
+    -title => $progname,
+;
+$main->bind('<Key-Escape>', 'destroy' );
+
+# A frame at the bottom of the form to contain the OK and Cancel buttons. We
+# make it before the rest so that it does not shrink when the form is resized.
+my $buttonframe = $main->Frame()->pack(
+    -side => 'bottom',
+    -padx => 10,
+    -pady => 10,
+    -fill => 'x',
+);
+$buttonframe->Button(
+    -text => 'Cancel',
+    -command => sub { exit 0 },
+)->pack(
+    -side => 'right',
+);
+$buttonframe->Button(
+    -text => 'OK',
+    -command => \&start_jpeg_manipulation,
+)->pack(
+    -side => 'right',
+);
+
+# The main pane, scrollable. It will contain pretty much all of the rest
+my $mainpane = $main->Scrolled(Pane =>
+    -relief => 'sunken',
+    -borderwidth => 1,
+    -scrollbars => 'oe',
+    -sticky => 'nwe',
+    -width => 600,
+    -height => 350,
+)->pack(
+    -padx => 10,
+    -pady => 10,
+    -expand => 'yes',
+    -fill => 'both',
+);
+
+# Here are the pixmaps used to draw the arrows describing the possible orientations.
+$main->Pixmap('rot-90', -data => <<EOF); # {{{1
+/* XPM */
+static char *rot_90[] = {
+/* columns rows colors chars-per-pixel */
+"16 16 2 1",
+"  c black",
+". c None",
+/* pixels */
+"............ ...",
+"............  ..",
+"............   .",
+"........        ",
+"......  ....   .",
+"..... ......  ..",
+".... ....... ...",
+".... ...........",
+"... ............",
+"... ............",
+"... ............",
+".. .............",
+".. .............",
+".. .............",
+".. .............",
+".. ............."
+};
+EOF
+# }}}1
+$main->Pixmap('rot90', -data => <<EOF); # {{{1
+/* XPM */
+static char *rot90[] = {
+/* columns rows colors chars-per-pixel */
+"16 16 2 1",
+"  c black",
+". c None",
+/* pixels */
+"... ............",
+"..  ............",
+".   ............",
+"        ........",
+".   ....  ......",
+"..  ...... .....",
+"... ....... ....",
+"........... ....",
+"............ ...",
+"............ ...",
+"............ ...",
+"............. ..",
+"............. ..",
+"............. ..",
+"............. ..",
+"............. .."
+};
+EOF
+# }}}1
+$main->Pixmap('rot180', -data => <<EOF); # {{{1
+/* XPM */
+static char *rot180[] = {
+/* columns rows colors chars-per-pixel */
+"16 16 2 1",
+"  c black",
+". c None",
+/* pixels */
+".. .............",
+".  .............",
+"       .........",
+".  ....    .....",
+".. ........ ....",
+"............ ...",
+"............. ..",
+".............. .",
+".............. .",
+".............. .",
+"............. ..",
+"............ ...",
+"........... ....",
+".......    .....",
+"       .........",
+"................",
+};
+EOF
+# }}}1
+$main->Pixmap('rot0', -data => <<EOF); # {{{1
+/* XPM */
+static char *rot0[] = {
+/* columns rows colors chars-per-pixel */
+"16 16 2 1",
+"  c black",
+". c None",
+/* pixels */
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"..            ..",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................"
+};
+EOF
+# }}}1
+$main->Pixmap('recycle', -data => <<EOF); # {{{1
+/* XPM */
+static char *recycle[] = {
+/* columns rows colors chars-per-pixel */
+"16 16 2 1",
+"  c black",
+". c None",
+/* pixels */
+".......   ......",
+"..             .",
+". ............. ",
+".               ",
+". ............. ",
+". ... .. .. ... ",
+". ... .. .. ... ",
+". ... .. .. ... ",
+".. .. .. .. .. .",
+".. .. .. .. .. .",
+".. ... . . ... .",
+".. ... . . ... .",
+"... .. . . .. ..",
+"... .. . . .. ..",
+"... ......... ..",
+"....         ..."
+};
+EOF
+# }}}1
+
+# Scan through the records (i.e., the Jpeg files) and add another frame
+# containing all the widgets related to that record.
+foreach my $record ( @record ) {
+    my $f = $mainpane->Frame(
+	-relief => 'raised',
+	-borderwidth => 1,
+    )->pack(
+	-expand => 'yes',
+	-fill => 'both',
+    );
+    
+    # THUMBNAIL
+    {
+	my $image;
+	if ( $record->{thumbnail} ) {
+	    # a thumbnail was found within the Jpeg. Use this one
+	    $image = $main->Photo(-format => 'JPEG', -data => encode_base64(${$record->{thumbnail}}));
+	}
+	else {
+	    # no ready-made thumbnail. Read the whole Jpeg and use Image::Magick to resize it.
+	    my $i = new Image::Magick;
+	    $i->Read($record->{path});
+	    $i->Resize('160x120');
+	    my ($data) = $i->ImageToBlob();
+	    $image = $main->Photo(-format => 'JPEG', -data => encode_base64($data));
+	}
+	my $l = $f->Label(-image => $image)->pack(-side => 'left');
+	my $record_ref = \$record;
+	$l->bind('<Button-1>', sub {display_image $record});
+    }
+    
+    # We won't need to access the main record frame any more, so we have $f
+    # reference another nested frame, to the right of the thumbnail.
+    $f = $f->Frame->pack(
+	-side => 'left',
+	-fill => 'x',
+	-expand => 'yes',
+    );
+
+    # On top of it, another frame with a label to the left, and the delete button to the right.
+    my $f2 = $f->Frame()->pack(-fill => 'x', -expand => 'yes', -padx => 5);
+    # DELETE
+    if ( $opt{delete} ) {
+        $f2->Checkbutton(
+            -image => 'recycle',
+            -indicatoron => 0,
+            -variable => $record->{delete},
+            -width => 20,
+            -height => 20,
+        )->pack(-side => 'right');
+    }
+    # LABEL
+    $f2->Label(
+	-text => "$$record{path} - $$record{datetime}",
+	-anchor => 'nw',
+    )->pack(
+	-side => 'right',
+	-fill => 'x',
+	-expand => 'yes',
+    );
+
+    $f = $f->Frame()->pack(-fill => 'x', -expand => 'yes');
+
+    # ROTATION
+    # Another frame to store the orientation radio buttons
+    my $orientation_frame = $f->Frame()->pack(
+	-side => 'left',
+    );
+    $orientation_frame->Radiobutton(
+	-variable => $record->{new_orientation},
+	-value => 8,
+	-image => 'rot90',
+    )->pack(-side => 'top');
+    $orientation_frame->Radiobutton(
+	-variable => $record->{new_orientation},
+	-value => 1,
+	-image => 'rot0',
+    )->pack(-side => 'top');
+    $orientation_frame->Radiobutton(
+	-variable => $record->{new_orientation},
+	-value => 6,
+	-image => 'rot-90',
+    )->pack(-side => 'top');
+    $orientation_frame->Radiobutton(
+	-variable => $record->{new_orientation},
+	-value => 3,
+	-image => 'rot180',
+    )->pack(-side => 'top');
+
+    # COMMENTS
+    # Finally a last frame, expandible, to contain the comments.
+    my $comment_frame = $f->Frame()->pack(
+	-side => 'right',
+	-fill => 'x',
+	-expand => 'yes',
+    );
+
+    # First, labels to display the original comments
+    foreach ( @{$record->{comment}} ) {
+	$comment_frame->Label(
+	    -text => $_,
+	)->pack();
+    }
+    # Then, entry boxes to allow modifications of the same comments.
+    foreach ( @{$record->{new_comment}} ) {
+	$comment_frame->Entry(
+	    -textvariable => $_,
+	)->pack(
+	    -fill => 'x',
+	    -expand => 'yes',
+	);
+    }
+
+}
+
+MainLoop;
+
+=head1 NAME
+
+editphotos - a simple Perl/Tk to edit the comments and orientation of digital
+still pictures
+
+=head1 SYNOPSIS
+
+    editphotos directory
+
+=head1 DESCRIPTION
+
+C<editphotos> reads the directory given on the command line (or the current
+directory) and displays thumbnails of all the Jpeg images it can find in a
+window. Each thumbnail is displayed along with controls to alter its
+orientation and/or its comments, and to select it for deletion. When the user
+clicks OK, the changes are written back to the Jpeg files and the selected
+files are deleted from the disk.
+
+=head2 Orientation
+
+The orientation of a Jpeg image is a byte stored in its header, and describing
+how the picture should really be looked at. Along with each thumbnail,
+C<editphotos> will display a series of four radio buttons, representing the four
+possible rotations. One of these buttons will be hilighted, according to the
+Orientation info found in the Jpeg file. The buttons mean that the picture, in
+order to be seen properly, should first be:
+
+=over 4
+
+=item rotated 90 degrees, clockwise
+
+=item rotated 90 degrees, counter-clockwise
+
+=item rotated 180 degrees (i.e., it is currently upside down)
+
+=item or left as it is.
+
+=back
+
+If the selected radio button does not reflect the actual orientation of the
+picture, another one can be selected. When OK is pressed, all the changes in
+orientation will be written back to the Jpeg files. Only the Orientation field
+will be changed, but the picture itself will not be rotated.
+
+=head2 Comments
+
+A Jpeg file can contain a list of comments. C<editphotos> will display them as
+labels (i.e., read-only), and in text entry widgets so that the previous
+comments can be seen even after it has been edited.
+There will always be one
+more text entry than there are comments, so that a comment can be added. If the
+original file contained no comments at all, C<editphotos> will display only one
+empty text entry widget. Once OK is pressed, the changed comments will be
+written back to the Jpeg file.
+
+=head2 Deletion
+
+Each Jpeg is displayed with a check button with the image of a dustbin.
+Selecting this button will mark the corresponding Jpeg for deletion. The
+selected files will be deleted only when the 'OK' button is pressed.
+
+=head2 Display
+
+When clicking on a thumbnail, C<editphotos> will open an extra window to
+display a larger picture (800x600). Hit the Escape key to close it. Several
+such bigger pictures can be displayed at the same time.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--nodelete>
+
+Safe mode: the delete buttons will not be displayed at all to prevent
+accidental deletion.
+
+=item B<-d>, B<--dummy>
+
+Dummy mode: prints out what would be done, but does not actually modify any
+Jpeg file. With C<-d> and without C<--nodelete>, C<editphotos> will output
+messages about deleting files, but will not actually do so.
+
+=item B<-h>, B<--help>
+
+Shows a help message and exits.
+
+=item B<-v>, B<--version>
+
+Shows the program's current version and exits.
+
+=back
+
+=head1 SEE ALSO
+
+Image::MetaData::JPEG, Tk
+
+=head1 AUTHOR
+
+Copyright © 2004
+
+Cédric Bouvier <cbouvi@cpan.org>
+
+=cut

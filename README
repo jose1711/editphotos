@@ -1,0 +1,56 @@
+PURPOSE
+    I own a digital still camera which generates Jpeg files. The camera's
+    user interface allows to flag the pictures as being rotated 90°, a mean
+    to indicate that their top left corner should be considered as the top
+    right, without actually rotating the file. I use this flag to generate
+    HTML galleries that can be seen without the need to bend your neck,
+    while keeping the original Jpeg files untouched.
+
+    Unfortunately, I often forget to flag the Orientation of the Jpeg files
+    while they are still in the digital camera, and I end up with files on
+    my hard drive that are wrongly marked as being "landscape" while they
+    are indeed "portrait". So I need a tool to correct this.
+
+    And while I was at it, I enabled the tool to edit the comments within
+    the Jpeg files, so that the HTML gallery generator need not read an
+    extra file to know what title to display with what image.
+
+DEPENDANCIES
+    This program is written in Perl/Tk and uses a couple of non-standard
+    Perl modules, all freely available from your local CPAN mirror
+    (http://www.cpan.org).
+
+    perl 5.6.1 or higher
+    Tk
+    Tk::JPEG
+    Image::MetaData::JPEG
+
+    Whenever possible, thumbnail images are extracted from the bigger Jpeg
+    file itself. When they're not available, the program uses ImageMagick to
+    resize the image and turn it into a thumbnail. Therefore, you must
+    install ImageMagick (http://www.imagemagick.org), and its Perl API
+    PerlMagick: Image::Magick.
+
+INSTALLATION
+    Make sure you have Perl, ImageMagick and all the necessary modules
+    installed properly.
+
+    Then copy the file bin/editphotos to some directory in you path, e.g.,
+    /usr/local/bin.
+
+    You can optionally generate the man page:
+
+        pod2man --section=1 /usr/local/bin/editphotos > /usr/local/man/man1/editphotos.1
+
+COPYING
+    This is free software and you are welcome to copy it, modify it or
+    redistribute it under certain conditions. See the LICENSE file that
+    ships with this distribution.
+
+BUGS
+    This is my first try at Tk in Perl. There's bound to be bugs in this
+    program. Let me know if you find any and thank you for giving it a try.
+
+CONTACT
+    Cédric Bouvier <cbouvi@cpan.org>
+

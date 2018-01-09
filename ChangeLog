@@ -1,0 +1,19 @@
+0.3 - 2004-09-
+
+        * Feature: new buttons to delete Jpeg files
+        * Feature: --nodelete option to prevent the display of delete buttons
+        * Feature: Bindings so that the Escape key closes the windows
+        * Feature: Larger pictures rotated according to the Orientation field
+        * Feature: Photographs sorted by date
+        * Bugfix: typos in POD.
+
+0.2 - 2004-09-22
+
+	* Feature: --dummy option to allow testing without actually modifying any
+          Jpeg file
+        * Bugfix: modifying an existing comment would cause a crash.
+        * Feature: setting a comment to an empty string actually deletes it
+
+0.1 - 2004-09-21
+
+	* Initial release
