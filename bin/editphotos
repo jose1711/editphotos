@@ -134,6 +134,7 @@ sub start_jpeg_manipulation {
             next;
         }
 	my $img;
+	my $mtime=(stat($rec->{path}))[9];
 	if ( $rec->{orientation} != ${$rec->{new_orientation}} ) {
             print "$$rec{path}: changing orientation from $$rec{orientation} to ${$$rec{new_orientation}}\n";
 	    # Parse the Jpeg file
@@ -181,6 +182,8 @@ sub start_jpeg_manipulation {
 	    # $img is defined only when orientation or comments have changed.
 	    print "Writing modifications to $$rec{path}\n";
 	    $img->save();
+	    print "Restoring original mtime";
+	    utime($mtime, $mtime, $rec->{path})
 	}
     }
     exit 0;
